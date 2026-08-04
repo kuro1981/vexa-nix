@@ -1,0 +1,32 @@
+name: Update Vexa
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Update pinned source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/update.sh
+
+      - name: Open update pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update Vexa source"
+          title: "chore: update Vexa source"
+          body: "Automated update of the pinned Vexa commit and Nix lock file."
+          branch: automation/update-vexa
+          delete-branch: true
