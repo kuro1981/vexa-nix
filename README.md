@@ -18,6 +18,14 @@ The wrapper uses the pinned Vexa source as the Compose build context. To run a l
 VEXA_SOURCE=/path/to/vexa nix run .#compose -- up
 ```
 
+The default Compose mode keeps Vexa's upstream object-store behavior: the internal MinIO service is used with `MINIO_ENDPOINT=minio:9000`. To run the Nix-packaged Garage node in the same Compose lifecycle, opt into Garage mode:
+
+```bash
+VEXA_OBJECT_STORE=garage nix run .#compose -- up
+```
+
+In Garage mode the wrapper loads the Garage image built from `garage-nix`, starts a single-node Garage server with its default S3 access key and `vexa-recordings` bucket, waits for `garage status` to become healthy, and only then starts `meeting-api`. The wrapper injects `MINIO_ENDPOINT=garage:3900`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_BUCKET=vexa-recordings`, and `MINIO_SECURE=false` into Vexa. Override `GARAGE_ACCESS_KEY`, `GARAGE_SECRET_KEY`, `RECORDING_BUCKET`, `GARAGE_ENDPOINT`, or `GARAGE_SECURE` when needed; the standard `MINIO_*` defaults are not used to configure Garage.
+
 Copy the upstream environment template before configuring services:
 
 ```bash
@@ -57,7 +65,7 @@ nix run .#infra
 
 By default it stores state under `$XDG_STATE_HOME/vexa` (or `$HOME/.local/state/vexa`), listens on PostgreSQL `5432` and Valkey `6379`, and creates the `vexa` database. Override `VEXA_INFRA_STATE_DIR`, `POSTGRES_PORT`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, or `VALKEY_PORT` as needed. MinIO is intentionally not bundled because the current nixpkgs package is marked insecure and abandoned; configure an external S3-compatible endpoint for recording storage.
 
-For recording storage, export `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, and `RECORDING_BUCKET` before starting `meeting-api`. A small self-hosted Garage deployment is the recommended external S3-compatible backend for this project; AWS S3, Cloudflare R2, Backblaze B2, or another compatible service work as well. Garage remains a separate data-plane service: the flake provides its `garage` administration CLI and `aws` S3 client, but `vexa-infra` does not start or own the object-store data directory.
+For recording storage outside Compose, export `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, and `RECORDING_BUCKET` before starting `meeting-api`. A small self-hosted Garage deployment is the recommended external S3-compatible backend for this project; AWS S3, Cloudflare R2, Backblaze B2, or another compatible service work as well. The `vexa-infra` app does not start or own an object-store data directory. The Compose wrapper's opt-in Garage mode above is the exception: it owns a local single-node Garage data directory through Compose volumes and wires that node into `meeting-api`.
 
 Authenticated browser profiles use a separate scoped store: set `BOT_USERDATA_S3_PATH`, `BOT_S3_ENDPOINT`, `BOT_S3_BUCKET`, `BOT_S3_ACCESS_KEY`, and `BOT_S3_SECRET_KEY`. The hybrid bot launcher forwards the `BOT_S3_*` settings into the Docker bot; credentials should be scoped to the relevant bucket/prefix rather than shared administrator credentials.
 

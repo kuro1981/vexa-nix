@@ -62,9 +62,8 @@
     flake-utils.lib.eachSystem supportedSystems (system:
     let
       pkgs = import nixpkgs { inherit system; };
-      garagePackages = lib.optionals (builtins.hasAttr system garage-nix.packages) [
-        garage-nix.packages.${system}.default
-      ];
+      garagePackage = lib.attrByPath [ "packages" system "default" ] null garage-nix;
+      garagePackages = lib.optional (garagePackage != null) garagePackage;
       llmAgentsPkgs = llm-agents.packages.${system};
       vexaSource = pkgs.fetchFromGitHub {
         owner = vexaOwner;
@@ -456,11 +455,57 @@
         cp -R ${vexaSource}/. "$out/share/vexa/"
       '';
 
+      garageConfig = pkgs.writeText "garage-compose.toml" ''
+        metadata_dir = "/var/lib/garage/meta"
+        data_dir = "/var/lib/garage/data"
+        db_engine = "sqlite"
+        replication_factor = 1
+        rpc_bind_addr = "0.0.0.0:3901"
+        rpc_public_addr = "garage:3901"
+        rpc_secret = "vexa-nix-compose-dev-rpc-secret"
+
+        [s3_api]
+        api_bind_addr = "0.0.0.0:3900"
+        s3_region = "garage"
+      '';
+
+      garageImage =
+        if garagePackage == null then
+          null
+        else
+          pkgs.dockerTools.buildImage {
+            name = "vexa-nix/garage";
+            tag = "2.3.0";
+            copyToRoot = pkgs.buildEnv {
+              name = "garage-compose-root";
+              paths = [ garagePackage ];
+              pathsToLink = [ "/bin" ];
+            };
+            extraCommands = ''
+              mkdir -p etc var/lib/garage/meta var/lib/garage/data
+              cp ${garageConfig} etc/garage.toml
+            '';
+            config = {
+              Cmd = [ "${garagePackage}/bin/garage" "server" "--single-node" "--default-bucket" ];
+              Env = [ "GARAGE_CONFIG_FILE=/etc/garage.toml" ];
+            };
+          };
+      garageImagePath = if garageImage == null then "" else garageImage;
+
       vexa-compose = pkgs.writeShellApplication {
         name = "vexa-compose";
         runtimeInputs = [ pkgs.coreutils pkgs.docker pkgs.docker-compose ];
         text = ''
           set -euo pipefail
+
+          if command -v docker-compose >/dev/null 2>&1 && docker-compose version >/dev/null 2>&1; then
+            compose=(docker-compose)
+          elif command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+            compose=(docker compose)
+          else
+            echo "No Docker Compose provider found; install docker-compose or enable the Docker Compose plugin." >&2
+            exit 1
+          fi
 
           source_root="''${VEXA_SOURCE:-}"
           if [[ -z "$source_root" ]]; then
@@ -475,6 +520,7 @@
           workdir="$(mktemp -d "''${TMPDIR:-/tmp}/vexa-nix.XXXXXX")"
           trap 'rm -rf "$workdir"' EXIT
           cp -R "$source_root"/. "$workdir/"
+          chmod -R u+w "$workdir"
           if [[ -f "$PWD/.env" ]]; then
             cp "$PWD/.env" "$workdir/deploy/compose/.env"
           elif [[ -f "$PWD/deploy/compose/.env" ]]; then
@@ -482,7 +528,67 @@
           fi
           cd "$workdir/deploy/compose"
 
-          exec docker-compose "$@"
+          if [[ "''${VEXA_OBJECT_STORE:-minio}" == garage ]]; then
+            garage_image_path="${garageImagePath}"
+            if [[ -z "$garage_image_path" ]]; then
+              echo "Garage is not available for system ${system}." >&2
+              exit 1
+            fi
+
+            docker_bin="''${VEXA_DOCKER_BIN:-docker}"
+            "$docker_bin" load --input "$garage_image_path" >/dev/null
+            garage_access_key="''${GARAGE_ACCESS_KEY:-vexa-recordings-access}"
+            garage_secret_key="''${GARAGE_SECRET_KEY:-vexa-recordings-secret}"
+            garage_bucket="''${RECORDING_BUCKET:-vexa-recordings}"
+            garage_endpoint="''${GARAGE_ENDPOINT:-garage:3900}"
+            garage_secure="''${GARAGE_SECURE:-false}"
+
+            cat > .docker-compose.garage.yml <<EOF
+          services:
+            minio:
+              profiles: ["minio"]
+            minio-init:
+              profiles: ["minio"]
+            garage:
+              image: vexa-nix/garage:2.3.0
+              environment:
+                GARAGE_DEFAULT_ACCESS_KEY: $garage_access_key
+                GARAGE_DEFAULT_SECRET_KEY: $garage_secret_key
+                GARAGE_DEFAULT_BUCKET: $garage_bucket
+              healthcheck:
+                test: ["CMD", "garage", "status"]
+                interval: 5s
+                timeout: 5s
+                retries: 12
+              volumes:
+                - garage-meta:/var/lib/garage/meta
+                - garage-data:/var/lib/garage/data
+              networks: [vexa]
+              restart: unless-stopped
+            meeting-api:
+              environment:
+                MINIO_ENDPOINT: $garage_endpoint
+                MINIO_ACCESS_KEY: $garage_access_key
+                MINIO_SECRET_KEY: $garage_secret_key
+                MINIO_BUCKET: $garage_bucket
+                MINIO_SECURE: $garage_secure
+              depends_on: !override
+                postgres:
+                  condition: service_healthy
+                redis:
+                  condition: service_healthy
+                runtime:
+                  condition: service_healthy
+                garage:
+                  condition: service_healthy
+          volumes:
+            garage-meta:
+            garage-data:
+          EOF
+            exec "''${compose[@]}" -f docker-compose.yml -f .docker-compose.garage.yml "$@"
+          fi
+
+          exec "''${compose[@]}" "$@"
         '';
       };
     in
