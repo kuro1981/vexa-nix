@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh run *)",
+      "Bash(gh api *)",
+      "Bash(git checkout *)",
+      "Bash(chmod +x scripts/update.sh)",
+      "Bash(git update-index *)"
+    ]
+  }
+}
