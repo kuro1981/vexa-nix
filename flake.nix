@@ -51,8 +51,8 @@
       inherit (nixpkgs) lib;
       vexaOwner = "vexa-ai";
       vexaRepo = "vexa";
-      vexaRev = "1f6898cf486a0f57ee0544e5e7bd6382f9612a6f";
-      vexaHash = "sha256-jcWB9ORYoUYwVawoiB1QTU6p8dQ6cNzAZ+kK+RWGfg4=";
+      vexaRev = "6b26f7b921756d6db128d42cd70b4b7046381407";
+      vexaHash = "sha256-ep/AFIucY3208A9UoAhPZkPS5PSVunrmv1E1vMZp8Cw=";
       supportedSystems = [
         "x86_64-linux"
         "aarch64-linux"
